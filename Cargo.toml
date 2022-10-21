@@ -1,0 +1,8 @@
+[package]
+name = "my-ssh"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+cursive = "0.20"
+regex = "1"
