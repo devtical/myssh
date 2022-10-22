@@ -1,6 +1,9 @@
 [package]
 name = "myssh"
+description = "Checking for existing SSH keys"
 version = "0.0.1"
+authors = ["Wahyu Kristianto <w.kristories@gmail.com>"]
+license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [dependencies]
