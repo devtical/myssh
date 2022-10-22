@@ -11,20 +11,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: x86_64-pc-windows-gnu
-            archive: zip
-          - target: x86_64-unknown-linux-musl
-            archive: tar.gz tar.xz
-          - target: x86_64-apple-darwin
-            archive: zip
+        target:
+          [
+            x86_64-pc-windows-gnu,
+            x86_64-unknown-linux-musl,
+            x86_64-apple-darwin,
+          ]
     steps:
       - uses: actions/checkout@master
-      - name: Compile and release
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+      - run: cargo build
+      - name: Compile
+        id: compile
         uses: rust-build/rust-build.action@v1.3.2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
           RUSTTARGET: ${{ matrix.target }}
-          ARCHIVE_TYPES: ${{ matrix.archive }}
-          TOOLCHAIN_VERSION: 1.64
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOOLCHAIN_VERSION: nightly
+          ARCHIVE_TYPES: tar.gz
