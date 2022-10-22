@@ -27,10 +27,7 @@ fn main() {
 
     let mut siv = cursive::default();
 
-    siv.add_layer(
-        Dialog::around(select.scrollable().fixed_size((40, 10))).title("My Keys"),
-    );
-
+    siv.add_layer(Dialog::around(select.scrollable().fixed_size((40, 10))).title("My Keys"));
     siv.run();
 }
 
