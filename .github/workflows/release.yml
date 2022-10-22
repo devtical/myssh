@@ -4,31 +4,49 @@ on:
   release:
     types: [created]
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
-  release:
-    name: release ${{ matrix.target }}
+  create-release:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          [
-            x86_64-pc-windows-gnu,
-            x86_64-unknown-linux-musl,
-            x86_64-apple-darwin,
-          ]
     steps:
-      - uses: actions/checkout@master
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly
-          override: true
-      - run: cargo build
-      - name: Compile
-        id: compile
-        uses: rust-build/rust-build.action@v1.3.2
+      - uses: actions/checkout@v3
+      - uses: taiki-e/create-gh-release-action@v1
         env:
-          RUSTTARGET: ${{ matrix.target }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TOOLCHAIN_VERSION: nightly
-          ARCHIVE_TYPES: tar.gz
+
+  upload-assets:
+    strategy:
+      matrix:
+        include:
+          # - target: aarch64-unknown-linux-gnu
+          #   os: ubuntu-latest
+          # - target: aarch64-apple-darwin
+          #   os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          # - target: x86_64-pc-windows-gnu
+          #   os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          include: LICENSE,README.md
+          bin: myssh
+          # (optional) On which platform to distribute the `.tar.gz` file.
+          # [default value: unix]
+          # [possible values: all, unix, windows, none]
+          tar: unix
+          # (optional) On which platform to distribute the `.zip` file.
+          # [default value: windows]
+          # [possible values: all, unix, windows, none]
+          zip: windows
+          # (optional) Target triple, default is host triple.
+          target: ${{ matrix.target }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
