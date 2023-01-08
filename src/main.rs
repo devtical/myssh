@@ -35,7 +35,7 @@ fn show_next_window(siv: &mut Cursive, str: &str) {
     siv.pop_layer();
 
     let contents = fs::read_to_string(str).expect("Should have been able to read the file");
-    let text = format!("{}", contents);
+    let text = contents;
 
     siv.add_layer(Dialog::around(TextView::new(text)).button("Quit", |s| s.quit()));
 }
