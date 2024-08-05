@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [dependencies]
-cursive = "0.20"
+cursive = "0.21"
 regex = "1"
 
 [profile.release]
