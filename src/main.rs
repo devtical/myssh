@@ -33,7 +33,7 @@ fn show_file_selection(siv: &mut Cursive) {
     siv.add_layer(
         Dialog::around(select.scrollable().fixed_size((40, 10)))
             .title("My SSH Keys")
-            .button("Quit", |s| s.quit())
+            .button("Quit", |s| s.quit()),
     );
 }
 
@@ -49,6 +49,6 @@ fn show_next_window(siv: &mut Cursive, file_path: &str) {
                 s.pop_layer();
                 show_file_selection(s);
             })
-            .button("Quit", |s| s.quit())
+            .button("Quit", |s| s.quit()),
     );
 }
