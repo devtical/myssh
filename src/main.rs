@@ -6,39 +6,49 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    let home = std::env::var("HOME").unwrap();
-    let path = Path::new(&home).join(".ssh");
-    let mut arr = Vec::new();
+    let mut siv = cursive::default();
+    show_file_selection(&mut siv);
+    siv.run();
+}
 
-    for entry in fs::read_dir(path).expect("Unable to list") {
-        let entry = entry.expect("unable to get entry");
+fn show_file_selection(siv: &mut Cursive) {
+    let home = std::env::var("HOME").expect("HOME environment variable not set");
+    let ssh_path = Path::new(&home).join(".ssh");
+    let mut keys = Vec::new();
+
+    for entry in fs::read_dir(&ssh_path).expect("Unable to list directory") {
+        let entry = entry.expect("Unable to read entry");
         let path = entry.path();
-        let str = path.display().to_string();
+        let file_path = path.display().to_string();
 
-        if !str.contains("known_hosts") {
-            arr.push(str);
+        if !file_path.contains("known_hosts") {
+            keys.push(file_path);
         }
     }
 
     let mut select = SelectView::new().h_align(HAlign::Center).autojump();
-
-    select.add_all_str(arr);
+    select.add_all_str(keys);
     select.set_on_submit(show_next_window);
 
-    let mut siv = cursive::default();
-
     siv.add_layer(
-        Dialog::around(select.scrollable().fixed_size((40, 10))).title("My Keys"),
+        Dialog::around(select.scrollable().fixed_size((40, 10)))
+            .title("My SSH Keys")
+            .button("Quit", |s| s.quit())
     );
-
-    siv.run();
 }
 
-fn show_next_window(siv: &mut Cursive, str: &str) {
+fn show_next_window(siv: &mut Cursive, file_path: &str) {
     siv.pop_layer();
 
-    let contents = fs::read_to_string(str).expect("Should have been able to read the file");
-    let text = contents;
+    let contents = fs::read_to_string(file_path).expect("Unable to read the file");
+    let text_view = TextView::new(contents);
 
-    siv.add_layer(Dialog::around(TextView::new(text)).button("Quit", |s| s.quit()));
+    siv.add_layer(
+        Dialog::around(text_view)
+            .button("Back", move |s| {
+                s.pop_layer();
+                show_file_selection(s);
+            })
+            .button("Quit", |s| s.quit())
+    );
 }
