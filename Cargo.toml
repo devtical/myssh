@@ -1,14 +1,13 @@
 [package]
 name = "myssh"
 description = "Checking for existing SSH keys"
-version = "0.0.1"
-authors = ["Wahyu Kristianto <w.kristories@gmail.com>"]
+version = "0.0.3"
+authors = ["W Kristianto <w.kristories@gmail.com>"]
 license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [dependencies]
-cursive = "0.20"
-regex = "1"
+cursive = "0.21.1"
 
 [profile.release]
 debug = false
