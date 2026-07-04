@@ -64,3 +64,68 @@ jobs:
           zip: none
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew-tap:
+    name: Update Homebrew tap
+    needs: upload-assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute checksums
+        id: checksums
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          intel_url="https://github.com/devtical/myssh/releases/download/v${VERSION}/myssh-x86_64-apple-darwin.tar.gz"
+          arm_url="https://github.com/devtical/myssh/releases/download/v${VERSION}/myssh-aarch64-apple-darwin.tar.gz"
+
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL "$intel_url" | sha256sum | awk '{print $1}' > sha256-intel.txt &&
+               curl -fsSL "$arm_url" | sha256sum | awk '{print $1}' > sha256-arm.txt; then
+              echo "intel=$(cat sha256-intel.txt)" >> "$GITHUB_OUTPUT"
+              echo "arm=$(cat sha256-arm.txt)" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Assets not ready yet, retrying in 15s..."
+            sleep 15
+          done
+
+          echo "Failed to download release assets"
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          repository: devtical/homebrew-formulae
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: homebrew-formulae
+
+      - uses: actions/checkout@v4
+        with:
+          path: myssh
+
+      - name: Update formula
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA256_INTEL: ${{ steps.checksums.outputs.intel }}
+          SHA256_ARM: ${{ steps.checksums.outputs.arm }}
+        run: |
+          myssh/.github/scripts/update-homebrew-formula.sh \
+            "$VERSION" \
+            "$SHA256_INTEL" \
+            "$SHA256_ARM" \
+            "homebrew-formulae/Formula/myssh.rb"
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: homebrew-formulae
+          commit-message: "myssh ${{ steps.version.outputs.version }}"
+          title: "myssh ${{ steps.version.outputs.version }}"
+          body: |
+            Automated update from [devtical/myssh](https://github.com/devtical/myssh) release v${{ steps.version.outputs.version }}.
+          branch: "myssh-${{ steps.version.outputs.version }}"
+          delete-branch: true
+
