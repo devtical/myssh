@@ -16,6 +16,7 @@ arboard = "3.6.1"
 clap = { version = "4.6.1", features = ["derive", "env"] }
 cursive = "0.21.1"
 rand_core = { version = "0.6", features = ["getrandom"] }
+rpassword = "7.5.5"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 ssh-key = { version = "0.6.7", features = ["ed25519", "encryption", "p256", "rsa", "std"] }
@@ -28,3 +29,6 @@ lto = true
 [profile.dev]
 opt-level = 1              
 overflow-checks = false  
+
+[dev-dependencies]
+tempfile = "3.27.0"
