@@ -155,7 +155,7 @@ fn print_list_line(key: &SshKeyInfo) {
 
 fn cmd_show(ssh_dir: &PathBuf, key_name: &str) -> Result<()> {
     let key = find_key(ssh_dir, key_name)?;
-    print!("{}", format_key_detail(&key));
+    print!("{}", format_key_detail(&key, true));
     Ok(())
 }
 

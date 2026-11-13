@@ -3,13 +3,17 @@ use serde::Serialize;
 use ssh_key::{Algorithm, HashAlg, PrivateKey, PublicKey};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
 const EXCLUDED_FILES: &[&str] = &[
     "known_hosts",
     "known_hosts.old",
     "authorized_keys",
+    "authorized_keys2",
     "config",
+    "environment",
+    "rc",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,20 +47,24 @@ pub fn resolve_ssh_dir(custom: Option<&Path>) -> Result<PathBuf> {
         return Ok(dir.to_path_buf());
     }
 
-    if let Ok(env_dir) = std::env::var("MYSSH_DIR") {
-        return Ok(PathBuf::from(env_dir));
-    }
-
     let home = std::env::var("HOME").map_err(|_| MySshError::HomeNotSet)?;
     Ok(Path::new(&home).join(".ssh"))
 }
 
 pub fn should_show_file_name(file_name: &str) -> bool {
+    if file_name.starts_with('.') {
+        return false;
+    }
+
     if EXCLUDED_FILES.contains(&file_name) {
         return false;
     }
 
     !file_name.ends_with(".pub")
+}
+
+pub fn looks_like_private_key(contents: &str) -> bool {
+    contents.contains("-----BEGIN ") && contents.contains("PRIVATE KEY-----")
 }
 
 fn should_show_entry(path: &Path) -> bool {
@@ -75,6 +83,38 @@ pub fn public_key_path(private_path: &Path) -> PathBuf {
     let mut pub_path = private_path.as_os_str().to_os_string();
     pub_path.push(".pub");
     PathBuf::from(pub_path)
+}
+
+pub fn set_mode(path: &Path, mode: u32) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|err| {
+            MySshError::WriteError {
+                path: path.to_path_buf(),
+                source: err.to_string(),
+            }
+        })?;
+    }
+
+    #[cfg(not(unix))]
+    let _ = (path, mode);
+
+    Ok(())
+}
+
+/// Create a directory meant to hold private keys, restricted to the owner (0700).
+pub fn ensure_private_dir(dir: &Path) -> Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(dir).map_err(|err| MySshError::WriteError {
+        path: dir.to_path_buf(),
+        source: err.to_string(),
+    })?;
+
+    set_mode(dir, 0o700)
 }
 
 fn format_permissions(mode: u32) -> String {
@@ -174,8 +214,24 @@ fn algorithm_name(algorithm: Algorithm) -> String {
     }
 }
 
-fn read_public_key_content(pub_path: &Path) -> Option<String> {
-    fs::read_to_string(pub_path).ok()
+/// Derive the public key of a non-OpenSSH-format key (e.g. legacy PEM) via `ssh-keygen -y`.
+/// Passes an empty passphrase so encrypted keys fail instead of prompting.
+fn derive_public_key(private_path: &Path) -> Option<String> {
+    let output = Command::new("ssh-keygen")
+        .args(["-y", "-P", "", "-f"])
+        .arg(private_path)
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let public_key = String::from_utf8(output.stdout).ok()?;
+    let public_key = public_key.trim();
+
+    (!public_key.is_empty()).then(|| public_key.to_string())
 }
 
 fn parse_key_details(private_path: &Path, contents: &str) -> KeyDetails {
@@ -184,20 +240,13 @@ fn parse_key_details(private_path: &Path, contents: &str) -> KeyDetails {
 
     let public_key_from_file = public_key_path_str
         .as_ref()
-        .and_then(|_| read_public_key_content(&pub_path));
+        .and_then(|_| fs::read_to_string(&pub_path).ok());
 
     if let Ok(private_key) = PrivateKey::from_openssh(contents.as_bytes()) {
-        let fingerprint = private_key.fingerprint(HashAlg::Sha256).to_string();
-        let algorithm = algorithm_name(private_key.algorithm());
-        let comment = {
-            let c = private_key.comment();
-            if c.is_empty() {
-                None
-            } else {
-                Some(c.to_string())
-            }
-        };
-        let encrypted = private_key.is_encrypted();
+        let comment = Some(private_key.comment())
+            .filter(|c| !c.is_empty())
+            .map(str::to_string);
+
         let public_key = public_key_from_file.or_else(|| {
             private_key
                 .public_key()
@@ -207,8 +256,29 @@ fn parse_key_details(private_path: &Path, contents: &str) -> KeyDetails {
         });
 
         return KeyDetails {
-            algorithm,
-            fingerprint,
+            algorithm: algorithm_name(private_key.algorithm()),
+            fingerprint: private_key.fingerprint(HashAlg::Sha256).to_string(),
+            comment,
+            encrypted: private_key.is_encrypted(),
+            public_key,
+            public_key_path: public_key_path_str,
+        };
+    }
+
+    let encrypted = contents.contains("ENCRYPTED");
+    let public_key = public_key_from_file.or_else(|| derive_public_key(private_path));
+
+    if let Some(parsed) = public_key
+        .as_deref()
+        .and_then(|content| PublicKey::from_openssh(content.trim()).ok())
+    {
+        let comment = Some(parsed.comment())
+            .filter(|c| !c.is_empty())
+            .map(str::to_string);
+
+        return KeyDetails {
+            algorithm: algorithm_name(parsed.algorithm()),
+            fingerprint: parsed.fingerprint(HashAlg::Sha256).to_string(),
             comment,
             encrypted,
             public_key,
@@ -216,26 +286,12 @@ fn parse_key_details(private_path: &Path, contents: &str) -> KeyDetails {
         };
     }
 
-    if let Some(public_content) = public_key_from_file.as_deref() {
-        if let Ok(public_key) = PublicKey::from_openssh(public_content) {
-            let fingerprint = public_key.fingerprint(HashAlg::Sha256).to_string();
-            return KeyDetails {
-                algorithm: algorithm_name(public_key.algorithm()),
-                fingerprint,
-                comment: None,
-                encrypted: contents.contains("ENCRYPTED"),
-                public_key: public_key_from_file,
-                public_key_path: public_key_path_str,
-            };
-        }
-    }
-
     KeyDetails {
         algorithm: "Unknown".to_string(),
         fingerprint: "N/A".to_string(),
         comment: None,
-        encrypted: contents.contains("ENCRYPTED"),
-        public_key: public_key_from_file,
+        encrypted,
+        public_key: None,
         public_key_path: public_key_path_str,
     }
 }
@@ -245,6 +301,13 @@ pub fn inspect_key(path: &Path) -> Result<SshKeyInfo> {
         path: path.to_path_buf(),
         source: err.to_string(),
     })?;
+
+    if !looks_like_private_key(&contents) {
+        return Err(MySshError::ParseError {
+            path: path.to_path_buf(),
+            source: "not a private key".to_string(),
+        });
+    }
 
     let name = path
         .file_name()
@@ -264,8 +327,8 @@ pub fn inspect_key(path: &Path) -> Result<SshKeyInfo> {
 }
 
 pub fn list_ssh_keys(ssh_dir: &Path) -> Result<Vec<SshKeyInfo>> {
-    let entries = fs::read_dir(ssh_dir).map_err(|err| {
-        MySshError::General(format!("Unable to list {}: {err}", ssh_dir.display()))
+    let entries = fs::read_dir(ssh_dir).map_err(|_| MySshError::SshDirNotFound {
+        path: ssh_dir.to_path_buf(),
     })?;
 
     let mut keys: Vec<SshKeyInfo> = entries
@@ -286,28 +349,41 @@ pub fn list_ssh_keys(ssh_dir: &Path) -> Result<Vec<SshKeyInfo>> {
     Ok(keys)
 }
 
+/// Find a key by exact file name inside `ssh_dir`, or by an explicit path
+/// (anything containing a path separator).
 pub fn find_key(ssh_dir: &Path, name: &str) -> Result<SshKeyInfo> {
-    let keys = list_ssh_keys(ssh_dir)?;
-    keys.into_iter()
-        .find(|k| k.name == name || k.path.ends_with(name))
-        .ok_or_else(|| MySshError::KeyNotFound {
-            name: name.to_string(),
-        })
+    let not_found = || MySshError::KeyNotFound {
+        name: name.to_string(),
+    };
+
+    let candidate = Path::new(name);
+    if candidate.components().count() > 1 {
+        if !candidate.is_file() {
+            return Err(not_found());
+        }
+
+        return inspect_key(candidate);
+    }
+
+    list_ssh_keys(ssh_dir)?
+        .into_iter()
+        .find(|k| k.name == name)
+        .ok_or_else(not_found)
 }
 
-pub fn format_key_detail(key: &SshKeyInfo) -> String {
+pub fn format_key_detail(key: &SshKeyInfo, include_private: bool) -> String {
     let mut output = String::new();
 
     output.push_str(&format!("Path: {}\n", key.path));
     output.push_str(&format!("Size: {} bytes\n", key.metadata.size_bytes));
 
     if let Some(modified) = &key.metadata.modified {
-        output.push_str(&format!("Modified: {modified}\n"));
+        output.push_str(&format!("Modified: {modified} UTC\n"));
     }
 
     output.push_str(&format!("Permissions: {}", key.metadata.permissions));
     if !key.metadata.permissions_secure {
-        output.push_str(" (WARNING: too permissive)");
+        output.push_str(" (WARNING: too permissive, run chmod 600)");
     }
     output.push('\n');
 
@@ -339,6 +415,10 @@ pub fn format_key_detail(key: &SshKeyInfo) -> String {
         }
     }
 
+    if !include_private {
+        return output;
+    }
+
     if let Ok(contents) = fs::read_to_string(&key.path) {
         output.push('\n');
         output.push_str("--- Private Key ---\n");
@@ -351,7 +431,21 @@ pub fn format_key_detail(key: &SshKeyInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::should_show_file_name;
+    use super::*;
+    use tempfile::TempDir;
+
+    const FAKE_KEY: &str =
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nnot-really-a-key\n-----END OPENSSH PRIVATE KEY-----\n";
+
+    fn ssh_dir_with(files: &[(&str, &str)]) -> TempDir {
+        let dir = TempDir::new().unwrap();
+
+        for (name, contents) in files {
+            fs::write(dir.path().join(name), contents).unwrap();
+        }
+
+        dir
+    }
 
     #[test]
     fn excludes_known_hosts() {
@@ -364,7 +458,70 @@ mod tests {
     }
 
     #[test]
+    fn excludes_hidden_files() {
+        assert!(!should_show_file_name(".DS_Store"));
+    }
+
+    #[test]
     fn includes_private_key_like_name() {
         assert!(should_show_file_name("id_ed25519"));
+    }
+
+    #[test]
+    fn list_skips_files_that_are_not_private_keys() {
+        let dir = ssh_dir_with(&[("id_test", FAKE_KEY), ("config.bak", "Host x\n")]);
+
+        let names: Vec<String> = list_ssh_keys(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|k| k.name)
+            .collect();
+
+        assert_eq!(names, vec!["id_test"]);
+    }
+
+    #[test]
+    fn find_key_requires_exact_name() {
+        let dir = ssh_dir_with(&[("id_ed25519", FAKE_KEY)]);
+
+        assert!(find_key(dir.path(), "id_ed25519").is_ok());
+        assert!(matches!(
+            find_key(dir.path(), "25519"),
+            Err(MySshError::KeyNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn find_key_accepts_explicit_path() {
+        let dir = ssh_dir_with(&[("id_elsewhere", FAKE_KEY)]);
+        let empty = TempDir::new().unwrap();
+        let path = dir.path().join("id_elsewhere");
+
+        let key = find_key(empty.path(), path.to_str().unwrap()).unwrap();
+
+        assert_eq!(key.name, "id_elsewhere");
+    }
+
+    #[test]
+    fn detail_hides_private_key_unless_requested() {
+        let dir = ssh_dir_with(&[("id_test", FAKE_KEY)]);
+        let key = find_key(dir.path(), "id_test").unwrap();
+
+        assert!(!format_key_detail(&key, false).contains("PRIVATE KEY"));
+        assert!(format_key_detail(&key, true).contains("PRIVATE KEY"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_dir_creates_owner_only_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent = TempDir::new().unwrap();
+        let dir = parent.path().join("nested/.ssh");
+
+        ensure_private_dir(&dir).unwrap();
+
+        let mode = fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
     }
 }
