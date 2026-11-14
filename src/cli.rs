@@ -46,9 +46,9 @@ pub enum Commands {
         /// Key algorithm
         #[arg(long, value_enum, default_value_t = KeyAlgorithm::Ed25519)]
         algorithm: KeyAlgorithm,
-        /// Output file name
-        #[arg(long, default_value = "id_ed25519")]
-        name: String,
+        /// Output file name [default: id_<algorithm>]
+        #[arg(long)]
+        name: Option<String>,
         /// Comment for the key
         #[arg(long)]
         comment: Option<String>,
@@ -79,7 +79,7 @@ pub enum Commands {
     Import {
         /// Source directory containing key files
         src: PathBuf,
-        /// Destination file name in ~/.ssh
+        /// Name of the private key file in the source directory (required if it has several)
         #[arg(long)]
         name: Option<String>,
     },
@@ -108,7 +108,7 @@ pub fn run(cli: Cli) -> Result<()> {
         }) => generate::generate_key(
             &ssh_dir,
             algorithm,
-            &name,
+            name.as_deref(),
             comment.as_deref(),
             passphrase.as_deref(),
         ),
