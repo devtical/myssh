@@ -3,7 +3,7 @@ use crate::error::{MySshError, Result};
 use crate::generate;
 use crate::keys::{find_key, format_key_detail, list_ssh_keys, resolve_ssh_dir, SshKeyInfo};
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -28,10 +28,13 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Show key details and contents
+    /// Show key details
     Show {
         /// Key file name or path
         key: String,
+        /// Also print the private key contents
+        #[arg(long)]
+        private: bool,
     },
     /// Show key fingerprint
     Fingerprint {
@@ -52,9 +55,9 @@ pub enum Commands {
         /// Comment for the key
         #[arg(long)]
         comment: Option<String>,
-        /// Protect key with a passphrase
+        /// Protect the key with a passphrase (prompted, or read from MYSSH_PASSPHRASE)
         #[arg(long)]
-        passphrase: Option<String>,
+        passphrase: bool,
     },
     /// Add a key to the ssh-agent
     Add {
@@ -98,20 +101,24 @@ pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
         None => crate::tui::run(&ssh_dir),
         Some(Commands::List { json }) => cmd_list(&ssh_dir, json),
-        Some(Commands::Show { key }) => cmd_show(&ssh_dir, &key),
+        Some(Commands::Show { key, private }) => cmd_show(&ssh_dir, &key, private),
         Some(Commands::Fingerprint { key, json }) => cmd_fingerprint(&ssh_dir, &key, json),
         Some(Commands::Generate {
             algorithm,
             name,
             comment,
             passphrase,
-        }) => generate::generate_key(
-            &ssh_dir,
-            algorithm,
-            name.as_deref(),
-            comment.as_deref(),
-            passphrase.as_deref(),
-        ),
+        }) => {
+            let passphrase = passphrase.then(read_passphrase).transpose()?;
+
+            generate::generate_key(
+                &ssh_dir,
+                algorithm,
+                name.as_deref(),
+                comment.as_deref(),
+                passphrase.as_deref(),
+            )
+        }
         Some(Commands::Add { key }) => agent::add_key(&ssh_dir, &key),
         Some(Commands::Remove { key }) => agent::remove_key(&ssh_dir, &key),
         Some(Commands::AgentList) => agent::list_agent_keys(),
@@ -122,15 +129,48 @@ pub fn run(cli: Cli) -> Result<()> {
     }
 }
 
-fn cmd_list(ssh_dir: &PathBuf, json: bool) -> Result<()> {
+fn read_passphrase() -> Result<String> {
+    if let Ok(passphrase) = std::env::var("MYSSH_PASSPHRASE") {
+        return non_empty_passphrase(passphrase);
+    }
+
+    let prompt_error =
+        |err: std::io::Error| MySshError::General(format!("Unable to read passphrase: {err}"));
+
+    let passphrase = rpassword::prompt_password("Enter passphrase: ").map_err(prompt_error)?;
+    let confirmation = rpassword::prompt_password("Confirm passphrase: ").map_err(prompt_error)?;
+
+    if passphrase != confirmation {
+        return Err(MySshError::General("Passphrases do not match".to_string()));
+    }
+
+    non_empty_passphrase(passphrase)
+}
+
+fn non_empty_passphrase(passphrase: String) -> Result<String> {
+    if passphrase.is_empty() {
+        return Err(MySshError::General(
+            "Passphrase must not be empty".to_string(),
+        ));
+    }
+
+    Ok(passphrase)
+}
+
+fn to_json<T: serde::Serialize>(value: &T) -> Result<String> {
+    serde_json::to_string_pretty(value).map_err(|err| MySshError::General(err.to_string()))
+}
+
+fn cmd_list(ssh_dir: &Path, json: bool) -> Result<()> {
     let keys = list_ssh_keys(ssh_dir)?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&keys).unwrap());
-    } else {
-        for key in &keys {
-            print_list_line(key);
-        }
+        println!("{}", to_json(&keys)?);
+        return Ok(());
+    }
+
+    for key in &keys {
+        print_list_line(key);
     }
 
     Ok(())
@@ -153,41 +193,46 @@ fn print_list_line(key: &SshKeyInfo) {
     );
 }
 
-fn cmd_show(ssh_dir: &PathBuf, key_name: &str) -> Result<()> {
+fn cmd_show(ssh_dir: &Path, key_name: &str, include_private: bool) -> Result<()> {
     let key = find_key(ssh_dir, key_name)?;
-    print!("{}", format_key_detail(&key, true));
+    print!("{}", format_key_detail(&key, include_private));
     Ok(())
 }
 
-fn cmd_fingerprint(ssh_dir: &PathBuf, key_name: &str, json: bool) -> Result<()> {
+fn cmd_fingerprint(ssh_dir: &Path, key_name: &str, json: bool) -> Result<()> {
     let key = find_key(ssh_dir, key_name)?;
 
-    let details = key.details.as_ref().ok_or_else(|| MySshError::ParseError {
-        path: PathBuf::from(&key.path),
-        source: "Unable to parse key".to_string(),
-    })?;
+    let details = key
+        .details
+        .as_ref()
+        .filter(|d| d.fingerprint != "N/A")
+        .ok_or_else(|| MySshError::ParseError {
+            path: PathBuf::from(&key.path),
+            source: "Unable to determine fingerprint".to_string(),
+        })?;
 
-    if json {
-        #[derive(serde::Serialize)]
-        struct FingerprintOutput<'a> {
-            name: &'a str,
-            path: &'a str,
-            algorithm: &'a str,
-            fingerprint: &'a str,
-            encrypted: bool,
-        }
-
-        let output = FingerprintOutput {
-            name: &key.name,
-            path: &key.path,
-            algorithm: &details.algorithm,
-            fingerprint: &details.fingerprint,
-            encrypted: details.encrypted,
-        };
-        println!("{}", serde_json::to_string_pretty(&output).unwrap());
-    } else {
+    if !json {
         println!("{}", details.fingerprint);
+        return Ok(());
     }
+
+    #[derive(serde::Serialize)]
+    struct FingerprintOutput<'a> {
+        name: &'a str,
+        path: &'a str,
+        algorithm: &'a str,
+        fingerprint: &'a str,
+        encrypted: bool,
+    }
+
+    let output = FingerprintOutput {
+        name: &key.name,
+        path: &key.path,
+        algorithm: &details.algorithm,
+        fingerprint: &details.fingerprint,
+        encrypted: details.encrypted,
+    };
+    println!("{}", to_json(&output)?);
 
     Ok(())
 }
