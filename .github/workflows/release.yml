@@ -81,12 +81,15 @@ jobs:
         run: |
           intel_url="https://github.com/devtical/myssh/releases/download/v${VERSION}/myssh-x86_64-apple-darwin.tar.gz"
           arm_url="https://github.com/devtical/myssh/releases/download/v${VERSION}/myssh-aarch64-apple-darwin.tar.gz"
+          source_url="https://github.com/devtical/myssh/archive/refs/tags/v${VERSION}.tar.gz"
 
           for attempt in 1 2 3 4 5; do
             if curl -fsSL "$intel_url" | sha256sum | awk '{print $1}' > sha256-intel.txt &&
-               curl -fsSL "$arm_url" | sha256sum | awk '{print $1}' > sha256-arm.txt; then
+               curl -fsSL "$arm_url" | sha256sum | awk '{print $1}' > sha256-arm.txt &&
+               curl -fsSL "$source_url" | sha256sum | awk '{print $1}' > sha256-source.txt; then
               echo "intel=$(cat sha256-intel.txt)" >> "$GITHUB_OUTPUT"
               echo "arm=$(cat sha256-arm.txt)" >> "$GITHUB_OUTPUT"
+              echo "source=$(cat sha256-source.txt)" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "Assets not ready yet, retrying in 15s..."
@@ -111,11 +114,13 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           SHA256_INTEL: ${{ steps.checksums.outputs.intel }}
           SHA256_ARM: ${{ steps.checksums.outputs.arm }}
+          SHA256_SOURCE: ${{ steps.checksums.outputs.source }}
         run: |
           myssh/.github/scripts/update-homebrew-formula.sh \
             "$VERSION" \
             "$SHA256_INTEL" \
             "$SHA256_ARM" \
+            "$SHA256_SOURCE" \
             "homebrew-formulae/Formula/myssh.rb"
 
       - uses: peter-evans/create-pull-request@v7

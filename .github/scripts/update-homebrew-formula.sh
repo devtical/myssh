@@ -4,7 +4,8 @@ set -euo pipefail
 VERSION="$1"
 SHA256_INTEL="$2"
 SHA256_ARM="$3"
-OUTPUT="${4:-Formula/myssh.rb}"
+SHA256_SOURCE="$4"
+OUTPUT="${5:-Formula/myssh.rb}"
 
 mkdir -p "$(dirname "$OUTPUT")"
 
@@ -12,10 +13,7 @@ cat > "$OUTPUT" <<RUBY
 class Myssh < Formula
   desc "Inspect and manage SSH keys in your .ssh directory"
   homepage "https://github.com/devtical/myssh"
-  version "${VERSION}"
   license "Apache-2.0"
-
-  depends_on macos: :monterey
 
   on_macos do
     on_intel do
@@ -28,8 +26,25 @@ class Myssh < Formula
     end
   end
 
+  on_linux do
+    on_intel do
+      url "https://github.com/devtical/myssh/archive/refs/tags/v${VERSION}.tar.gz"
+      sha256 "${SHA256_SOURCE}"
+    end
+    on_arm do
+      url "https://github.com/devtical/myssh/archive/refs/tags/v${VERSION}.tar.gz"
+      sha256 "${SHA256_SOURCE}"
+    end
+
+    depends_on "rust" => :build
+  end
+
   def install
-    bin.install "myssh"
+    if OS.mac?
+      bin.install "myssh"
+    else
+      system "cargo", "install", *std_cargo_args
+    end
   end
 
   test do
