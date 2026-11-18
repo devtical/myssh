@@ -40,7 +40,7 @@ Run `myssh` without arguments to open the TUI:
 myssh
 ```
 
-Select a key to view its details, including the public key, fingerprint, permissions, and private key contents. Press `q` to quit.
+Select a key to view its details, including the public key, fingerprint, and permissions. From the detail view you can copy the public key or reveal the private key. Press `q` to quit.
 
 ### CLI commands
 
@@ -49,8 +49,9 @@ Select a key to view its details, including the public key, fingerprint, permiss
 myssh list
 myssh list --json
 
-# Show full key details
+# Show key details (metadata, fingerprint, public key)
 myssh show id_ed25519
+myssh show id_ed25519 --private   # also print the private key
 
 # Show fingerprint only
 myssh fingerprint id_ed25519
@@ -59,16 +60,19 @@ myssh fingerprint id_ed25519 --json
 # Generate a new key pair
 myssh generate
 myssh generate --name my_key --algorithm ed25519 --comment "user@host"
-myssh generate --name my_key --passphrase "secret"
+myssh generate --algorithm rsa          # saved as id_rsa
+myssh generate --name my_key --passphrase   # prompts for a passphrase
+MYSSH_PASSPHRASE=secret myssh generate --name my_key --passphrase  # non-interactive
 
 # ssh-agent integration
-myssh add id_ed25519
+myssh add id_ed25519      # on macOS, also stores the passphrase in Keychain
 myssh remove id_ed25519
 myssh agent-list
 
 # Import and export key pairs
 myssh export id_ed25519 ~/backup/
-myssh import ~/backup/
+myssh import ~/backup/                  # if the folder holds exactly one private key
+myssh import ~/backup/ --name id_ed25519
 ```
 
 ### Custom SSH directory
