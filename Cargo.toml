@@ -1,7 +1,7 @@
 [package]
 name = "myssh"
 description = "Inspect and manage SSH keys in your .ssh directory"
-version = "0.0.4"
+version = "0.0.5"
 authors = ["W Kristianto <w.kristories@gmail.com>"]
 license = "Apache-2.0"
 edition = "2021"
